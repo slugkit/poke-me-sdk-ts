@@ -22,7 +22,7 @@ There is no third party to fetch this key from, unlike APNs or FCM: a VAPID keyp
 
 ### Your origins
 
-**App settings → allowed origins.** Add every origin you serve the page from, exactly:
+**App page → Edit app → Allowed origins.** Add every origin you serve the page from, exactly:
 
 ```
 https://app.example.com
