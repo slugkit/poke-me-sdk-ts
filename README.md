@@ -7,6 +7,9 @@ It owns the awkward parts of web push for you: the permission dance, the VAPID k
 - **Chrome / Edge / Firefox** — anywhere the Push API is available.
 - **Safari** — iOS/iPadOS 16.4+ and macOS 13.1+, once the site is **installed** (Add to Home Screen / Add to Dock). The SDK reports this as a distinct state so you can prompt for it.
 
+New to web push, or want the full walkthrough — dashboard setup, bundler configs, troubleshooting? **[SETUP.md](SETUP.md)**.
+Using an AI coding assistant? **[AGENTS.md](AGENTS.md)**.
+
 ## Install
 
 ```sh
@@ -40,7 +43,7 @@ button.addEventListener('click', async () => {
 ### 2. The service worker
 
 ```js
-// public/sw.js
+// src/pokeme-sw.js
 import { pokeMeServiceWorker } from '@poke-me/sdk/sw';
 
 pokeMeServiceWorker();
@@ -53,20 +56,21 @@ const poke = await PokeMe.init({
   baseUrl: 'https://push-me.io',
   appRef: 'your-app',
   clientKey: 'ck_…',
-  serviceWorker: { url: '/sw.js' },
+  serviceWorker: { url: '/pokeme-sw.js' },
 });
 ```
 
-The worker's **scope** decides which pages it controls, so serve it from the root (`/sw.js`) unless you know you want it narrower.
+The worker's **scope** decides which pages it controls, so serve it from the root (`/pokeme-sw.js`) unless you know you want it narrower.
 
 ## Before it will work
 
-Two things have to be set up on your poke-me app, both in the dashboard:
+Three things, all in the dashboard, none discoverable from a stack trace — see [SETUP.md §1](SETUP.md#1-prerequisites-in-the-dashboard):
 
-1. **A Web Push credential.** Without one, `enableNotifications()` throws a `PokeApiError` saying so rather than failing somewhere inside the browser.
-2. **Your origins.** A client key shipped in a JS bundle is public, so what actually authorises a browser is the origin it calls from. Add every origin you serve from — production, staging, preview, and your dev server (`http://localhost:5173`) — exactly, with no trailing slash.
+1. **A Web Push credential** on the app. The dashboard can generate one; there is no third party to fetch it from.
+2. **Your origins**, exactly — production, staging, preview, and your dev server (`http://localhost:5173`). A client key in a JS bundle is public, so the origin is what actually authorises a browser.
+3. **A client key** (`ck_…`), shown once at creation.
 
-If an origin is missing, requests fail with a 403 and the browser also logs a CORS error. The CORS error is the louder of the two and the more misleading; check `error.isOriginRejected` to tell them apart.
+If an origin is missing, requests fail with 403 *and* the browser logs a CORS error. The CORS error is louder and more misleading; check `error.isOriginRejected` to tell them apart.
 
 ## Why the lifecycle is split
 

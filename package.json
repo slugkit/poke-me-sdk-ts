@@ -23,6 +23,8 @@
   "files": [
     "dist",
     "README.md",
+    "SETUP.md",
+    "AGENTS.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
