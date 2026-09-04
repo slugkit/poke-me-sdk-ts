@@ -1,3 +1,14 @@
+## 0.1.1
+
+* **Fix: wait for an ACTIVE service worker before subscribing.** `register()`
+  resolves as soon as the worker script is fetched and installation begins, but
+  push events are only ever delivered to an *active* worker. Subscribing against
+  a still-installing registration succeeds, uploads a valid-looking
+  subscription, and then silently drops any push that arrives before activation
+  — indistinguishable from a broken subscription, and the exact shape of "the
+  server says delivered but nothing appeared". `serviceWorker: { url }` now
+  awaits `navigator.serviceWorker.ready` after registering.
+
 ## 0.1.0
 
 First release. Browser client for poke-me web push.
