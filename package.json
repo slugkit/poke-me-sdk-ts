@@ -1,6 +1,6 @@
 {
   "name": "@poke-me/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser client SDK for poke-me — web push addressed to your own app's users.",
   "license": "Apache-2.0",
   "repository": {

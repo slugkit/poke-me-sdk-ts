@@ -31,9 +31,14 @@ function installBrowserGlobals(permission: NotificationPermission = 'default') {
 
   const registration = { pushManager } as unknown as ServiceWorkerRegistration;
 
+  // `register` resolves with a registration whose worker may still be
+  // installing; `ready` is the one that guarantees an active worker. They are
+  // distinguishable here so a test can assert which the SDK uses.
+  const installing = { pushManager: { getSubscription: vi.fn(), subscribe: vi.fn() } };
+  const register = vi.fn().mockResolvedValue(installing);
   vi.stubGlobal('isSecureContext', true);
   vi.stubGlobal('navigator', {
-    serviceWorker: { ready: Promise.resolve(registration), register: vi.fn() },
+    serviceWorker: { ready: Promise.resolve(registration), register },
   });
   vi.stubGlobal('PushManager', class {});
   vi.stubGlobal('Notification', {
@@ -42,7 +47,7 @@ function installBrowserGlobals(permission: NotificationPermission = 'default') {
   });
   vi.stubGlobal('atob', (b64: string) => Buffer.from(b64, 'base64').toString('binary'));
 
-  return { pushManager, subscription, registration };
+  return { pushManager, subscription, registration, register, installing };
 }
 
 function fetchStub(handlers: Record<string, () => Response>): typeof globalThis.fetch {
@@ -260,5 +265,33 @@ describe('getSupportState', () => {
     installBrowserGlobals('granted');
     const poke = await PokeMe.init({ baseUrl: BASE, appRef: APP, clientKey: CLIENT_KEY });
     expect(poke.getSupportState()).toBe('granted');
+  });
+});
+
+describe('service worker registration', () => {
+  it('waits for an ACTIVE worker rather than a merely registered one', async () => {
+    // register() resolves as soon as the script is fetched, but push events are
+    // only delivered to an active worker. Subscribing against the installing
+    // registration succeeds and then silently drops pushes — the exact shape of
+    // "sent, reached 1 device, nothing arrived".
+    const { pushManager, register, installing } = installBrowserGlobals();
+    const fetch = fetchStub({
+      '/client-config': configOk,
+      '/push-subscription': empty,
+      '/devices': registerOk,
+    });
+
+    const poke = await PokeMe.init({
+      baseUrl: BASE,
+      appRef: APP,
+      clientKey: CLIENT_KEY,
+      fetch,
+      serviceWorker: { url: '/pokeme-sw.js' },
+    });
+    await poke.enableNotifications();
+
+    expect(register).toHaveBeenCalledWith('/pokeme-sw.js', undefined);
+    expect(installing.pushManager.subscribe).not.toHaveBeenCalled();
+    expect(pushManager.subscribe).toHaveBeenCalled();
   });
 });

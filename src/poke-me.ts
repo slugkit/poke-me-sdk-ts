@@ -254,7 +254,13 @@ export class PokeMe {
     const sw = this.#options.serviceWorker;
     if (sw && 'registration' in sw) return sw.registration;
     if (sw && 'url' in sw) {
-      return navigator.serviceWorker.register(sw.url, sw.scope ? { scope: sw.scope } : undefined);
+      await navigator.serviceWorker.register(sw.url, sw.scope ? { scope: sw.scope } : undefined);
+      // register() resolves as soon as the script is fetched and installation
+      // begins — but push events are only ever delivered to an ACTIVE worker.
+      // Subscribing against a still-installing registration succeeds and then
+      // silently drops any push that arrives before it activates, which is
+      // indistinguishable from a broken subscription. Wait for activation.
+      return navigator.serviceWorker.ready;
     }
     return navigator.serviceWorker.ready;
   }
