@@ -2,7 +2,8 @@ import { PokeApiClient } from '../api-client.js';
 import { parsePushEnvelope } from '../envelope.js';
 import * as storage from '../storage.js';
 import { decodeVapidKey, toWebPushSubscription } from '../support.js';
-import type { AlertPayload, PushPayload } from '../types.js';
+import type { AlertPayload, PushPayload, ReceiptState } from '../types.js';
+import { reportReceipts } from './receipts.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -35,6 +36,21 @@ export interface ServiceWorkerOptions {
     payload: AlertPayload | undefined,
     event: NotificationEvent,
   ) => void | Promise<void>;
+  /**
+   * Tell poke-me what became of each notification: `delivered` when the push
+   * arrives, `shown` once the browser has the notification, `opened` on a
+   * click. Nothing else can tell you — RFC 8030 defines push receipts and no
+   * browser push service implements them.
+   *
+   * On by default. Each event costs one small request, made inside the same
+   * `waitUntil` the worker is already held open by, retried once and then
+   * dropped. A receipt that never arrives means the device did not report one,
+   * never that the notification failed.
+   *
+   * Receipts are a paid poke-me feature; an unentitled plan is told so once and
+   * the SDK stops reporting on its own, so leaving this on costs nothing.
+   */
+  reportReceipts?: boolean;
 }
 
 /**
@@ -76,6 +92,11 @@ async function handlePush(event: PushEvent, options: ServiceWorkerOptions): Prom
     // Fall through with no payload: a notification still has to be shown.
   }
 
+  // Both states this event can produce, collected and sent as one request at
+  // the end. `delivered` is true the moment the envelope parsed; `shown` only
+  // once the browser has actually accepted the notification.
+  const observed: ReceiptState[] = payload ? ['delivered'] : [];
+
   if (payload) {
     try {
       await options.onPush?.(payload);
@@ -89,7 +110,13 @@ async function handlePush(event: PushEvent, options: ServiceWorkerOptions): Prom
   const alert: AlertPayload | undefined = payload?.kind === 'alert' ? payload : undefined;
 
   const spec = alert && options.render ? await options.render(alert) : undefined;
-  if (spec === null) return;
+  if (spec === null) {
+    // The consumer suppressed the notification. It arrived — that is worth
+    // reporting — but nothing was shown, and saying otherwise would put a
+    // display in the record that never happened.
+    await maybeReport(options, payload, observed);
+    return;
+  }
 
   const title =
     spec?.title ?? alert?.title ?? alert?.body ?? options.fallbackTitle ?? 'New notification';
@@ -106,6 +133,7 @@ async function handlePush(event: PushEvent, options: ServiceWorkerOptions): Prom
       };
 
   await self.registration.showNotification(title, notification);
+  observed.push('shown');
 
   if (alert?.badge !== undefined) {
     // Chromium PWAs only, and only when installed. Never worth failing a push over.
@@ -115,6 +143,22 @@ async function handlePush(event: PushEvent, options: ServiceWorkerOptions): Prom
     } catch {
       /* best effort */
     }
+  }
+
+  await maybeReport(options, payload, observed);
+}
+
+/** Report unless the consumer turned receipts off. Never throws. */
+async function maybeReport(
+  options: ServiceWorkerOptions,
+  payload: PushPayload | undefined,
+  states: ReceiptState[],
+): Promise<void> {
+  if (options.reportReceipts === false) return;
+  try {
+    await reportReceipts(payload, states);
+  } catch {
+    // Telemetry must not be able to fail a push.
   }
 }
 
@@ -126,6 +170,11 @@ async function handleNotificationClick(
 
   const data = event.notification.data as { pokeme?: AlertPayload } | undefined;
   const payload = data?.pokeme;
+
+  // Reported before the consumer's handler runs, and not inside it: a handler
+  // that navigates away or throws must not cost the receipt. This is the
+  // strongest evidence poke-me can offer that a person actually saw something.
+  await maybeReport(options, payload, ['opened']);
 
   if (options.onNotificationClick) {
     await options.onNotificationClick(payload, event);

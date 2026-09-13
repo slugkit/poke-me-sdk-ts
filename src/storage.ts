@@ -26,6 +26,16 @@ export interface StoredDevice {
    */
   vapidPublicKey?: string;
   externalUserId?: string;
+  /**
+   * Set once the backend answers a receipt report with `receipts_enabled:
+   * false` — the publisher's plan does not include receipts.
+   *
+   * Persisted rather than kept in memory because the service worker is torn
+   * down between events: a flag held in a module variable would be forgotten
+   * on every push, and the origin would report a billing decision for ever.
+   * Cleared by `uninstall`, along with the rest of the registration.
+   */
+  receiptsDisabled?: boolean;
 }
 
 function openDb(): Promise<IDBDatabase> {

@@ -30,7 +30,10 @@ export type {
   PushEnvelopeBase,
   PushOrigin,
   PushPayload,
+  Receipt,
+  ReceiptState,
   RegisterDeviceResponse,
+  ReportReceiptsResult,
   SystemPayload,
   WebPushSubscription,
 } from './types.js';

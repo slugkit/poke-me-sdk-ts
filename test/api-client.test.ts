@@ -177,3 +177,46 @@ describe('PokeApiClient', () => {
     await expect(clientWith(fetchMock).unidentify(DEVICE_TOKEN)).resolves.toBeUndefined();
   });
 });
+
+describe('reportReceipts', () => {
+  it('maps the wire shape and defaults the clock', async () => {
+    const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ recorded: 1, ignored: 0, receipts_enabled: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const api = new PokeApiClient({ baseUrl: BASE, fetch: fetchMock });
+
+    const result = await api.reportReceipts('dt_1', [
+      { notificationId: '019d-a', state: 'opened', at: 1_757_577_243_120 },
+      { notificationId: '019d-b', state: 'delivered' },
+    ]);
+
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.receipts[0]).toEqual({
+      notification_id: '019d-a',
+      state: 'opened',
+      at: 1_757_577_243_120,
+    });
+    expect(body.receipts[1].at).toBeGreaterThan(1_700_000_000_000);
+    expect(result).toEqual({ recorded: 1, ignored: 0, receiptsEnabled: true });
+  });
+
+  it('treats a missing receipts_enabled as enabled', async () => {
+    // A backend that has never heard of the flag is one where receipts work.
+    // Reading absence as "off" would silence the SDK against it for ever.
+    const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ recorded: 1, ignored: 0 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const api = new PokeApiClient({ baseUrl: BASE, fetch: fetchMock });
+
+    const result = await api.reportReceipts('dt_1', [
+      { notificationId: '019d-a', state: 'delivered' },
+    ]);
+    expect(result.receiptsEnabled).toBe(true);
+  });
+});

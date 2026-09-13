@@ -2,7 +2,9 @@ import { PokeApiError } from './errors.js';
 import type {
   ClientConfig,
   DeviceChannel,
+  Receipt,
   RegisterDeviceResponse,
+  ReportReceiptsResult,
   WebPushSubscription,
 } from './types.js';
 
@@ -113,6 +115,44 @@ export class PokeApiClient {
       channelName: i.channel_name,
       joinedAt: i.joined_at,
     }));
+  }
+
+  /**
+   * `POST /api/v1/devices/me/receipts` — report what became of notifications
+   * this device was sent.
+   *
+   * Up to 64 per call; the backend refuses a larger batch rather than
+   * truncating it. Idempotent per (notification, state), so a retry after a
+   * failure cannot double-count.
+   *
+   * `receiptsEnabled: false` is **success**, not an error: the publisher's plan
+   * does not include receipts, and the caller should stop reporting rather than
+   * retry.
+   */
+  async reportReceipts(deviceToken: string, receipts: Receipt[]): Promise<ReportReceiptsResult> {
+    const body = await this.#request<{
+      recorded?: number;
+      ignored?: number;
+      receipts_enabled?: boolean;
+    }>(`/api/v1/devices/me/receipts`, {
+      method: 'POST',
+      headers: this.#deviceHeaders(deviceToken),
+      body: JSON.stringify({
+        receipts: receipts.map((r) => ({
+          notification_id: r.notificationId,
+          state: r.state,
+          at: r.at ?? Date.now(),
+        })),
+      }),
+    });
+    return {
+      recorded: body.recorded ?? 0,
+      ignored: body.ignored ?? 0,
+      // Absent means enabled: a backend that has never heard of the flag is one
+      // where receipts work, and reading absence as "off" would silence the SDK
+      // against it for ever.
+      receiptsEnabled: body.receipts_enabled ?? true,
+    };
   }
 
   /** `DELETE /api/v1/devices/me` — uninstall: revokes the device server-side. */

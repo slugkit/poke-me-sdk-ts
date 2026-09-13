@@ -2,7 +2,7 @@ import { PokeApiClient } from './api-client.js';
 import { PokeApiError, PokePushUnavailableError, type PushSupportState } from './errors.js';
 import * as storage from './storage.js';
 import { decodeVapidKey, getPushSupportState, toWebPushSubscription } from './support.js';
-import type { DeviceChannel } from './types.js';
+import type { DeviceChannel, ReceiptState } from './types.js';
 
 export interface PokeMeOptions {
   /** Origin of your poke-me deployment, e.g. `https://push-me.io`. */
@@ -224,6 +224,34 @@ export class PokeMe {
   async getChannels(): Promise<DeviceChannel[]> {
     const device = await this.#requireDevice();
     return this.#api.getChannels(device.deviceToken);
+  }
+
+  /**
+   * Report what became of a notification, by its envelope `id`.
+   *
+   * The service worker reports `delivered`, `shown` and `opened` on its own —
+   * call this only for something it cannot see: an in-page surface of your own,
+   * or a click you handle outside `notificationclick`.
+   *
+   * Never throws, and a no-op once the backend has said the publisher's plan
+   * does not include receipts.
+   */
+  async reportReceipt(notificationId: string, state: ReceiptState): Promise<void> {
+    const device = this.#device;
+    if (!device || device.receiptsDisabled || !notificationId) return;
+    try {
+      const result = await this.#api.reportReceipts(device.deviceToken, [
+        { notificationId, state },
+      ]);
+      if (!result.receiptsEnabled) {
+        await storage.patchDevice(device.appRef, { receiptsDisabled: true });
+        this.#device = { ...device, receiptsDisabled: true };
+      }
+    } catch {
+      // Telemetry must not be able to fail a caller's flow, and a lost receipt
+      // is a receipt that never happened — which the backend already treats as
+      // proving nothing.
+    }
   }
 
   /**
