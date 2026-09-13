@@ -32,6 +32,7 @@ The SDK deliberately handles these; reimplementing them usually means removing t
 - **Credential storage in IndexedDB** — not `localStorage`, which service workers cannot read. The worker needs the device token to answer the event above.
 - **VAPID key rotation** — re-subscribing under a new application server key throws unless the old subscription is dropped first.
 - **`applicationServerKey` encoding** — passed as bytes, because not every browser accepts the base64 string.
+- **Delivery receipts** — `delivered` / `shown` / `opened`, reported from the worker's own events. Do not buffer them on a timer: a service worker is torn down between events and the batch would never flush. Do not report `shown` when `render()` returned `null` — nothing was displayed. A receipt that never arrives is not a failure; it is silence.
 
 ### Distinguish the unavailable states
 

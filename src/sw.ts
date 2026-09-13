@@ -14,4 +14,4 @@ export type { ServiceWorkerOptions } from './sw/service-worker.js';
 
 export { parsePushEnvelope } from './envelope.js';
 export { PokeEnvelopeError, PokeError } from './errors.js';
-export type { AlertPayload, PushPayload, SystemPayload } from './types.js';
+export type { AlertPayload, PushPayload, ReceiptState, SystemPayload } from './types.js';

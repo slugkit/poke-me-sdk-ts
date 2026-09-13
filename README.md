@@ -118,6 +118,30 @@ pokeMeServiceWorker({
 
 Every push **must** produce a notification — browsers enforce this, and a push that shows nothing gets replaced by the browser's own "this site was updated in the background" message. So `render()` returning `null` is supported but rarely what you want.
 
+## Delivery receipts
+
+Nobody else can tell you whether a notification arrived. RFC 8030 defines push receipts in §10 and no browser push service implements them. The browser is the only party that knows — so the service worker reports.
+
+It is on by default and there is nothing to wire:
+
+| Receipt | Reported when |
+|---|---|
+| `delivered` | the `push` event fires and the envelope parses |
+| `shown` | `showNotification` resolves — not when `render()` returned `null` |
+| `opened` | `notificationclick` fires, before your own handler runs |
+
+One small request per event, made inside the `waitUntil` the worker is already held open by, retried once and then dropped. There is no buffer with a timer, because a service worker is not a process: it is torn down between events, and a debounced batch would be collected before it ever flushed.
+
+For something the worker cannot see — an in-page surface of your own, or a click you handle outside `notificationclick`:
+
+```js
+await poke.reportReceipt(notificationId, 'opened');
+```
+
+**What you cannot read into it.** A receipt that never arrives does **not** mean the notification failed. The browser may have been closed, the worker may have been killed mid-request, or the push may have been coalesced. Receipts are positive evidence only.
+
+Receipts are a paid poke-me feature. If your plan does not include them the backend says so once and the SDK stops reporting — persisted with the device, so a worker restart does not start it asking again. Pass `reportReceipts: false` to `pokeMeServiceWorker()` to send none.
+
 ## What the SDK handles that you would otherwise have to
 
 - **`pushsubscriptionchange`.** Browsers rotate subscriptions on their own schedule, and this event is the only notice. Ignore it and installs go dark over weeks with no error anywhere — no failed request, nothing in your logs, just a slow silent decline. The SDK re-subscribes and re-uploads.
@@ -138,6 +162,7 @@ Every push **must** produce a notification — browsers enforce this, and a push
 | `poke.uninstall()` | Revoke server-side and forget the device. |
 | `poke.getSupportState()` | What this browser can do, and what the user said. |
 | `poke.getChannels()` | Channel subscriptions, if you use the channel surface. |
+| `poke.reportReceipt(id, state)` | Report `delivered`/`shown`/`opened` for something the worker cannot see. |
 
 Errors all extend `PokeError`: `PokeApiError` (HTTP or transport, with `statusCode`, `detail`, `isOriginRejected`), `PokePushUnavailableError` (carries the `state`), `PokeEnvelopeError`.
 

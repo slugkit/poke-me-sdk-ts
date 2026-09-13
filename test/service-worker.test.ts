@@ -305,3 +305,215 @@ describe('pushsubscriptionchange', () => {
     await storage.deleteDevice('other-app');
   });
 });
+
+/**
+ * Web push is the one transport where all three observations are available in
+ * one place — `push`, `showNotification`, `notificationclick` — and none of
+ * them reaches poke-me on its own. RFC 8030 defines receipts in §10 and no
+ * browser push service implements them, so the worker reports.
+ */
+describe('delivery receipts', () => {
+  const device = {
+    appRef: APP,
+    baseUrl: BASE,
+    deviceId: 'dev-1',
+    deviceToken: 'dt_1',
+    vapidPublicKey: VAPID,
+  };
+
+  function stubFetch(
+    body: Record<string, unknown> = { recorded: 1, ignored: 0, receipts_enabled: true },
+    init: ResponseInit = { status: 200, headers: { 'content-type': 'application/json' } },
+  ) {
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async () => new Response(JSON.stringify(body), init));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  function receiptCalls(fetchMock: ReturnType<typeof stubFetch>) {
+    return fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith('/api/v1/devices/me/receipts'),
+    );
+  }
+
+  it('reports delivered and shown as one request per push', async () => {
+    // A service worker is not a process — it is torn down between events — so
+    // a buffer with a timer would be collected before it ever flushed. One
+    // request per event, inside the waitUntil that already holds the worker
+    // open, is the only shape that survives.
+    const { fire } = installServiceWorkerGlobals();
+    const fetchMock = stubFetch();
+    await storage.saveDevice(device);
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker();
+    await fire('push', { data: { json: () => alertEnvelope } });
+
+    const calls = receiptCalls(fetchMock);
+    expect(calls).toHaveLength(1);
+    const [url, init] = calls[0]!;
+    expect(url).toBe(`${BASE}/api/v1/devices/me/receipts`);
+    expect((init as RequestInit).headers).toMatchObject({ Authorization: 'Bearer dt_1' });
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.receipts.map((r: { state: string }) => r.state)).toEqual(['delivered', 'shown']);
+    expect(body.receipts[0].notification_id).toBe(alertEnvelope.id);
+    // Milliseconds since the epoch, the unit the envelope's sent_at uses.
+    expect(body.receipts[0].at).toBeGreaterThan(1_700_000_000_000);
+  });
+
+  it('reports opened on a click', async () => {
+    const { fire } = installServiceWorkerGlobals();
+    const fetchMock = stubFetch();
+    await storage.saveDevice(device);
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker();
+    await fire('notificationclick', {
+      notification: { close: vi.fn(), data: { pokeme: { id: alertEnvelope.id } } },
+    });
+
+    const body = JSON.parse((receiptCalls(fetchMock)[0]![1] as RequestInit).body as string);
+    expect(body.receipts).toEqual([
+      { notification_id: alertEnvelope.id, state: 'opened', at: expect.any(Number) },
+    ]);
+  });
+
+  it('reports opened even when the consumer handles the click', async () => {
+    // Reported before the handler runs: one that navigates away or throws must
+    // not cost the receipt.
+    const { fire } = installServiceWorkerGlobals();
+    const fetchMock = stubFetch();
+    await storage.saveDevice(device);
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker({
+      onNotificationClick: () => {
+        throw new Error('consumer exploded');
+      },
+    });
+    await expect(
+      fire('notificationclick', {
+        notification: { close: vi.fn(), data: { pokeme: { id: alertEnvelope.id } } },
+      }),
+    ).rejects.toThrow('consumer exploded');
+
+    expect(receiptCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it('does not claim shown when render() suppressed the notification', async () => {
+    // It arrived — worth reporting — but nothing was displayed, and saying
+    // otherwise would put a display in the record that never happened.
+    const { fire, showNotification } = installServiceWorkerGlobals();
+    const fetchMock = stubFetch();
+    await storage.saveDevice(device);
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker({ render: () => null });
+    await fire('push', { data: { json: () => alertEnvelope } });
+
+    expect(showNotification).not.toHaveBeenCalled();
+    const body = JSON.parse((receiptCalls(fetchMock)[0]![1] as RequestInit).body as string);
+    expect(body.receipts.map((r: { state: string }) => r.state)).toEqual(['delivered']);
+  });
+
+  it('reports nothing for an unparseable push', async () => {
+    const { fire } = installServiceWorkerGlobals();
+    const fetchMock = stubFetch();
+    await storage.saveDevice(device);
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker({ fallbackTitle: 'Something happened' });
+    await fire('push', {
+      data: {
+        json: () => {
+          throw new Error('not json');
+        },
+      },
+    });
+
+    expect(receiptCalls(fetchMock)).toHaveLength(0);
+  });
+
+  it('reports nothing before the device has registered', async () => {
+    // A receipt is addressed by the device token. Without one there is nothing
+    // to report as.
+    const { fire } = installServiceWorkerGlobals();
+    const fetchMock = stubFetch();
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker();
+    await fire('push', { data: { json: () => alertEnvelope } });
+
+    expect(receiptCalls(fetchMock)).toHaveLength(0);
+  });
+
+  it('reportReceipts: false sends none', async () => {
+    const { fire } = installServiceWorkerGlobals();
+    const fetchMock = stubFetch();
+    await storage.saveDevice(device);
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker({ reportReceipts: false });
+    await fire('push', { data: { json: () => alertEnvelope } });
+
+    expect(receiptCalls(fetchMock)).toHaveLength(0);
+  });
+
+  it('remembers receipts_enabled: false across worker restarts', async () => {
+    // The worker is torn down between events, so a flag in a module variable
+    // would be forgotten on every push and the origin would report a billing
+    // decision for ever. It is persisted with the device.
+    const { fire } = installServiceWorkerGlobals();
+    const fetchMock = stubFetch({ recorded: 0, ignored: 2, receipts_enabled: false });
+    await storage.saveDevice(device);
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker();
+    await fire('push', { data: { json: () => alertEnvelope } });
+    expect(receiptCalls(fetchMock)).toHaveLength(1);
+    expect((await storage.loadDevice(APP))?.receiptsDisabled).toBe(true);
+
+    // A fresh worker, as after a teardown.
+    const restarted = installServiceWorkerGlobals();
+    const second = await loadServiceWorker();
+    second.pokeMeServiceWorker();
+    await restarted.fire('push', { data: { json: () => alertEnvelope } });
+
+    expect(receiptCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it('retries a failure exactly once, then drops it', async () => {
+    // Idempotent per (notification, state), so the retry cannot double-count —
+    // and there is no UI here and no retry queue, so the second failure is the
+    // end of it.
+    const { fire } = installServiceWorkerGlobals();
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValue(new TypeError('offline'));
+    vi.stubGlobal('fetch', fetchMock);
+    await storage.saveDevice(device);
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker();
+    await fire('push', { data: { json: () => alertEnvelope } });
+
+    expect(receiptCalls(fetchMock)).toHaveLength(2);
+  });
+
+  it('a failing report does not stop the notification', async () => {
+    const { fire, showNotification } = installServiceWorkerGlobals();
+    const fetchMock = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValue(new TypeError('offline'));
+    vi.stubGlobal('fetch', fetchMock);
+    await storage.saveDevice(device);
+
+    const { pokeMeServiceWorker } = await loadServiceWorker();
+    pokeMeServiceWorker();
+    await fire('push', { data: { json: () => alertEnvelope } });
+
+    expect(showNotification).toHaveBeenCalledTimes(1);
+  });
+});

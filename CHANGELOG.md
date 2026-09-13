@@ -1,3 +1,35 @@
+## 0.2.0
+
+* **Delivery receipts** — the SDK now tells poke-me what became of each
+  notification. Nothing else can: RFC 8030 defines push receipts in §10 and no
+  browser push service implements them. On by default; pass
+  `pokeMeServiceWorker({ reportReceipts: false })` to send none.
+
+  Three states, reported **independently** rather than as a progression:
+  `delivered` when the `push` event fires and the envelope parses, `shown` once
+  `showNotification` resolves, `opened` on `notificationclick`. A push whose
+  notification `render()` suppressed is `delivered` and never `shown` — saying
+  otherwise would put a display in the record that never happened.
+
+  `opened` is reported *before* the consumer's `onNotificationClick` runs: a
+  handler that navigates away or throws must not cost the receipt.
+
+  Sent inline, one small request per event inside the `waitUntil` the worker is
+  already held open by, retried exactly once and then dropped. No buffer and no
+  timer — a service worker is not a process, it is torn down between events, and
+  a debounced batch would be collected before it ever flushed. The two states
+  one push produces go in a single request.
+
+  Receipts are a paid poke-me feature. An unentitled plan is told so once, and
+  the flag is persisted **with the device** rather than held in a module
+  variable — the worker is torn down between events, so an in-memory flag would
+  be forgotten on every push and the origin would report a billing decision for
+  ever.
+
+  New: `poke.reportReceipt(id, state)` on the page, for an in-page surface the
+  worker cannot see; `PokeApiClient.reportReceipts`; the `ReceiptState`,
+  `Receipt` and `ReportReceiptsResult` types.
+
 ## 0.1.1
 
 * **Fix: wait for an ACTIVE service worker before subscribing.** `register()`
